@@ -36,7 +36,10 @@ class CompositeImpl : public HubImpl, public virtual Composite
 public:
 
   CompositeImpl (const boost::property_tree::ptree &conf,
-                 std::shared_ptr<MediaPipeline> mediaPipeline);
+                 std::shared_ptr<MediaPipeline> mediaPipeline,
+                 int mode, int outputWidth, int outputHeight,
+                 int aspectX, int aspectY, int cellWidth,
+                 int cellHeight, int maxNColumns, int xyGap);
 
   virtual ~CompositeImpl () {};
 

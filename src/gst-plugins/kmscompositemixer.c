@@ -25,6 +25,11 @@
 #include <commons/kmsrefstruct.h>
 #include <math.h>
 
+#define FIXED_OUTPUT_SIZE_MODE 0
+
+#define MIN_FRAMERATE 15
+#define MIN_OUTPUT_XY 10
+
 #define LATENCY 600             //ms
 
 #define PLUGIN_NAME "compositemixer"
@@ -97,6 +102,17 @@ struct _KmsCompositeMixerPrivate
   GRecMutex mutex;
   gint n_elems;
   gint output_width, output_height;
+  gint output_width_initial, output_height_initial;
+  gint aspect_x, aspect_y;
+  gint cell_width, cell_height, max_n_columns, xy_gap;
+  gint mode;
+};
+
+enum
+{
+  PROP_0,
+  PROP_SET_PROPERTIES,
+  N_PROPERTIES
 };
 
 /* class initialization */
@@ -161,7 +177,7 @@ kms_composite_mixer_recalculate_sizes (gpointer data)
 {
   KmsCompositeMixer *self = KMS_COMPOSITE_MIXER (data);
   GstCaps *filtercaps;
-  gint width, height, top, left, counter, n_columns, n_rows;
+  gint width, height, top, left, counter, n_columns, n_rows, margin_top, margin_left;
   GList *l;
   GList *values = g_hash_table_get_values (self->priv->ports);
 
@@ -175,10 +191,42 @@ kms_composite_mixer_recalculate_sizes (gpointer data)
   n_columns = (gint) ceil (sqrt (self->priv->n_elems));
   n_rows = (gint) ceil ((float) self->priv->n_elems / (float) n_columns);
 
-  GST_DEBUG_OBJECT (self, "columns %d rows %d", n_columns, n_rows);
+  if (self->priv->mode == FIXED_OUTPUT_SIZE_MODE) {
+    margin_top = margin_left = 0;
+    if (self->priv->n_elems > 2) {
+      gfloat currentRatio, setupRatio;
+      currentRatio = ((float) self->priv->output_width / (float) n_columns) / ((float) self->priv->output_height / (float) n_rows);
+      setupRatio = (float) self->priv->aspect_x / (float) self->priv->aspect_y;
+      if (setupRatio < currentRatio) {
+        height = self->priv->output_height / n_rows;
+        width = (gint) (((float) height / (float) self->priv->aspect_y) * (float) self->priv->aspect_x);
+      } else {
+        width = self->priv->output_width / n_columns;
+        height = (gint) (((float) width / (float) self->priv->aspect_x) * (float) self->priv->aspect_y);
+      }
+      margin_top = (gint) ((self->priv->output_height - height * n_rows) / 2.);
+      margin_left = (gint) ((self->priv->output_width - width * n_columns) / 2.);
+    } else {
+      width = self->priv->output_width / n_columns;
+      height = self->priv->output_height / n_rows;
+    }
+  } else {
+    if (self->priv->n_elems > self->priv->max_n_columns) {
+      n_rows = (gint) ceil(self->priv->n_elems / self->priv->max_n_columns);
+      n_columns = self->priv->max_n_columns;
+      self->priv->output_height = self->priv->cell_height * n_rows + self->priv->xy_gap * (n_rows - 1);
+    } else {
+      n_rows = 1;
+      n_columns = self->priv->n_elems;
+      self->priv->output_height = self->priv->cell_height;
+    }
+    self->priv->output_width = self->priv->cell_width * n_columns + self->priv->xy_gap * (n_columns - 1);
 
-  width = self->priv->output_width / n_columns;
-  height = self->priv->output_height / n_rows;
+    width = self->priv->cell_width;
+    height = self->priv->cell_height;
+  }
+
+  GST_DEBUG_OBJECT (self, "columns %d rows %d", n_columns, n_rows);
 
   for (l = values; l != NULL; l = l->next) {
     KmsCompositeMixerData *port_data = l->data;
@@ -194,8 +242,13 @@ kms_composite_mixer_recalculate_sizes (gpointer data)
     g_object_set (port_data->capsfilter, "caps", filtercaps, NULL);
     gst_caps_unref (filtercaps);
 
-    top = ((counter / n_columns) * height);
-    left = ((counter % n_columns) * width);
+    if (self->priv->mode == FIXED_OUTPUT_SIZE_MODE) {
+      top = ((counter / n_columns) * height) + margin_top;
+      left = ((counter % n_columns) * width) + margin_left;
+    } else {
+      top = ((counter / n_columns) * (height + self->priv->xy_gap));
+      left = ((counter % n_columns) * (width + self->priv->xy_gap));
+    }
 
     g_object_set (port_data->video_mixer_pad, "xpos", left, "ypos", top,
         "alpha", 1.0, NULL);
@@ -695,7 +748,7 @@ kms_composite_mixer_handle_port (KmsBaseHub * mixer,
           gst_caps_new_simple ("video/x-raw",
           "width", G_TYPE_INT, self->priv->output_width,
           "height", G_TYPE_INT, self->priv->output_height,
-          "framerate", GST_TYPE_FRACTION, 15, 1, NULL);
+          "framerate", GST_TYPE_FRACTION, MIN_FRAMERATE, 1, NULL);
       g_object_set (G_OBJECT (capsfilter), "caps", filtercaps, NULL);
       gst_caps_unref (filtercaps);
 
@@ -765,6 +818,92 @@ kms_composite_mixer_handle_port (KmsBaseHub * mixer,
 }
 
 static void
+kms_composite_mixer_set_property (GObject *object, guint property_id,
+    const GValue *value, GParamSpec *pspec)
+{
+  KmsCompositeMixer *self = KMS_COMPOSITE_MIXER (object);
+
+  KMS_COMPOSITE_MIXER_LOCK (self);
+
+  switch (property_id) {
+    case PROP_SET_PROPERTIES:
+    {
+      GstStructure *properties;
+
+      properties = g_value_dup_boxed (value);
+      gst_structure_get (properties, "mode", G_TYPE_INT,
+          &self->priv->mode, NULL);
+      gst_structure_get (properties, "output_width", G_TYPE_INT,
+          &self->priv->output_width, NULL);
+      gst_structure_get (properties, "output_height", G_TYPE_INT,
+          &self->priv->output_height, NULL);
+      gst_structure_get (properties, "aspect_x", G_TYPE_INT,
+          &self->priv->aspect_x, NULL);
+      gst_structure_get (properties, "aspect_y", G_TYPE_INT,
+          &self->priv->aspect_y, NULL);
+      gst_structure_get (properties, "cell_width", G_TYPE_INT,
+          &self->priv->cell_width, NULL);
+      gst_structure_get (properties, "cell_height", G_TYPE_INT,
+          &self->priv->cell_height, NULL);
+      gst_structure_get (properties, "max_n_columns", G_TYPE_INT,
+          &self->priv->max_n_columns, NULL);
+      gst_structure_get (properties, "xy_gap", G_TYPE_INT,
+          &self->priv->xy_gap, NULL);
+      if (self->priv->mode == FIXED_OUTPUT_SIZE_MODE) {
+        self->priv->output_width_initial = self->priv->output_width;
+        self->priv->output_height_initial = self->priv->output_height;
+      } else {
+        self->priv->output_width_initial = self->priv->output_width = MIN_OUTPUT_XY;
+        self->priv->output_height_initial = self->priv->output_height = MIN_OUTPUT_XY;
+      }
+
+      gst_structure_free (properties);
+      break;
+    }
+    default:
+      G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
+      break;
+  }
+
+  KMS_COMPOSITE_MIXER_UNLOCK (self);
+}
+
+static void
+kms_composite_mixer_get_property (GObject *object, guint property_id,
+    GValue *value, GParamSpec *pspec)
+{
+  KmsCompositeMixer *self = KMS_COMPOSITE_MIXER (object);
+
+  KMS_COMPOSITE_MIXER_LOCK (self);
+
+  switch (property_id) {
+    case PROP_SET_PROPERTIES:
+    {
+      GstStructure *data;
+
+      data = gst_structure_new ("data",
+          "mode", G_TYPE_INT, self->priv->mode,
+          "output_width", G_TYPE_INT, self->priv->output_width,
+          "output_height", G_TYPE_INT, self->priv->output_height,
+          "aspect_x", G_TYPE_INT, self->priv->aspect_x,
+          "aspect_y", G_TYPE_INT, self->priv->aspect_y,
+          "cell_width", G_TYPE_INT, self->priv->cell_width,
+          "cell_height", G_TYPE_INT, self->priv->cell_height,
+          "max_n_columns", G_TYPE_INT, self->priv->max_n_columns,
+          "xy_gap", G_TYPE_INT, self->priv->xy_gap, NULL);
+      g_value_set_boxed (value, data);
+      gst_structure_free (data);
+      break;
+    }
+    default:
+      G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
+      break;
+  }
+
+  KMS_COMPOSITE_MIXER_UNLOCK (self);
+}
+
+static void
 kms_composite_mixer_dispose (GObject * object)
 {
   KmsCompositeMixer *self = KMS_COMPOSITE_MIXER (object);
@@ -803,6 +942,8 @@ kms_composite_mixer_class_init (KmsCompositeMixerClass * klass)
       "CompositeMixer", "Generic", "Mixer element that composes n input flows"
       " in one output flow", "David Fernandez <d.fernandezlop@gmail.com>");
 
+  gobject_class->set_property = kms_composite_mixer_set_property;
+  gobject_class->get_property = kms_composite_mixer_get_property;
   gobject_class->dispose = GST_DEBUG_FUNCPTR (kms_composite_mixer_dispose);
   gobject_class->finalize = GST_DEBUG_FUNCPTR (kms_composite_mixer_finalize);
 
@@ -820,6 +961,11 @@ kms_composite_mixer_class_init (KmsCompositeMixerClass * klass)
   gst_element_class_add_pad_template (gstelement_class,
       gst_static_pad_template_get (&video_sink_factory));
 
+  g_object_class_install_property (gobject_class, PROP_SET_PROPERTIES,
+      g_param_spec_boxed ("set-properties", "set properties",
+          "Set composite properties",
+          GST_TYPE_STRUCTURE, (GParamFlags) G_PARAM_READWRITE));
+
   /* Registers a private structure for the instantiatable type */
   g_type_class_add_private (klass, sizeof (KmsCompositeMixerPrivate));
 }
@@ -833,9 +979,6 @@ kms_composite_mixer_init (KmsCompositeMixer * self)
 
   self->priv->ports = g_hash_table_new_full (g_int_hash, g_int_equal,
       release_gint, kms_composite_mixer_port_data_destroy);
-  //TODO:Obtain the dimensions of the bigger input stream
-  self->priv->output_height = 600;
-  self->priv->output_width = 800;
   self->priv->n_elems = 0;
 
   self->priv->loop = kms_loop_new ();

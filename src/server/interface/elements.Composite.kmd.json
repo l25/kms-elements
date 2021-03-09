@@ -12,6 +12,69 @@
               "name": "mediaPipeline",
               "doc": "the :rom:cls:`MediaPipeline` to which the dispatcher belongs",
               "type": "MediaPipeline"
+            },
+            {
+              "name": "mode",
+              "doc": "composite mode: 0 - fixed output size, cell size is recalculated, 1 - fixed cell size, output size is recalculated",
+              "type": "int",
+              "optional": true,
+              "defaultValue": 0
+            },
+            {
+              "name": "outputWidth",
+              "doc": "output width (fixed output size mode)",
+              "type": "int",
+              "optional": true,
+              "defaultValue": 1920
+            },
+            {
+              "name": "outputHeight",
+              "doc": "output height (fixed output size mode)",
+              "type": "int",
+              "optional": true,
+              "defaultValue": 1080
+            },
+            {
+              "name": "aspectX",
+              "doc": "aspect x of a cell (fixed output size mode)",
+              "type": "int",
+              "optional": true,
+              "defaultValue": 16
+            },
+            {
+              "name": "aspectY",
+              "doc": "aspect y of a cell (fixed output size mode)",
+              "type": "int",
+              "optional": true,
+              "defaultValue": 9
+            },
+            {
+              "name": "cellWidth",
+              "doc": "cell width (fixed cell size mode)",
+              "type": "int",
+              "optional": true,
+              "defaultValue": 64
+            },
+            {
+              "name": "cellHeight",
+              "doc": "cell height (fixed cell size mode)",
+              "type": "int",
+              "optional": true,
+              "defaultValue": 36
+            },
+            {
+              "name": "maxNColumns",
+              "doc": "maximum number of columns in a grid (fixed cell size mode)",
+              "type": "int",
+              "optional": true,
+              "defaultValue": 10
+            },
+            {
+              "name": "xyGap",
+              "doc": "gap between cells in a grid (fixed cell size mode)",
+              "type": "int",
+              "optional": true,
+              "defaultValue": 6
             }
           ]
         }
